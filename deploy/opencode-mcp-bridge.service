@@ -21,10 +21,13 @@ WorkingDirectory=/home/opencode/projects/opencode-mcp-bridge
 Environment=HOME=/home/opencode
 Environment=PATH=/home/opencode/.opencode/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_NO_WARNINGS=1
+# Required local configuration; create this file before starting the service.
+# Set BRIDGE_EXECUTOR_MODEL=provider/model (optionally #variant).
+EnvironmentFile=/etc/opencode-mcp-bridge/bridge.env
 # Absolute path to the real Node.js; the entry script runs from the working
-# directory. Config, Bearer token, SQLite, model and executor are all read from
-# defaults inside the project (config.js + .bearer_token); the loopback bind
-# (BRIDGE_HOST defaults to 127.0.0.1) is preserved unchanged.
+# directory. BRIDGE_* settings come from EnvironmentFile above; there is no
+# default executor model. Other defaults are defined in config.js.
+# BRIDGE_HOST defaults to 127.0.0.1; do not expose it unintentionally.
 ExecStart=/usr/bin/node src/main.js
 Restart=on-failure
 RestartSec=5

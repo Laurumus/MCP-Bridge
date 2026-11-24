@@ -94,7 +94,7 @@ export function isDefiniteRejection(e) {
  * OpenCode's own `"provider/model"` form never starts with "/" and never has an
  * empty model part, so both are rejected here instead of being sent upstream.
  *
- * The string and object forms share one validator (fieldShapeError) so they
+ * The string and object forms share one validator (modelRefFieldError) so they
  * cannot drift apart:
  * - string: the WHOLE reference is trimmed once, then split on the first "/"
  *   and at most one "#";
@@ -147,7 +147,8 @@ export function parseModelRef(model) {
  * True when `actual` (the model a live session/response reports, a Model.Ref
  * or Model.Info) is the model described by `expected` (a Model.Ref). The
  * variant is compared only when expected names one: OpenCode's catalog default
- * does not retain a variant, so an unset variant on either side is no mismatch.
+ * does not retain a variant. When expected names one, actual must report it;
+ * otherwise the actual variant is not constrained.
  */
 export function modelRefMatches(expected, actual) {
   if (!expected || !actual) return false;
@@ -287,7 +288,7 @@ export function createOpencodeApi({ spawnFn = nodeSpawn } = {}) {
       const ref = parseModelRef(model);
       if (!ref) {
         return Promise.reject(new OpenCodeError(
-          `invalid model reference: ${String(model)}`,
+          'invalid model reference (value not shown)',
           'exit',
           { httpStatus: 400 },
         ));

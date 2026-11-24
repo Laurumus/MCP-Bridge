@@ -2,8 +2,8 @@
 
 Локальный MCP-сервер (Streamable HTTP) для делегирования задач в OpenCode.
 Реализован на Node.js (`>=22.5`, нужен встроенный `node:sqlite`) с
-официальным SDK `@modelcontextprotocol/sdk` (v1.32.x). Слушает только
-loopback-адрес и вызывает `opencode api` через subprocess (без shell).
+официальным SDK `@modelcontextprotocol/sdk` (v1.32.x). По умолчанию слушает
+loopback-адрес (адрес можно переопределить через BRIDGE_HOST) и вызывает `opencode api` через subprocess (без shell).
 
 ```
 MCP-клиент → этот сервер (127.0.0.1:9999, Bearer-токен)
@@ -37,7 +37,8 @@ MCP-клиент → этот сервер (127.0.0.1:9999, Bearer-токен)
   executor-агента (не применён)
 - `deploy/opencode-mcp-bridge.service` — systemd unit
 - `deploy/install-autostart.sh` — установщик unit (только root)
-- `run_tests.sh` — запуск mock- и http-тестов
+- `scripts/test-isolated.js` — единый явный список изолированных тестов
+- `run_tests.sh` — оболочка того же запуска, что и `npm test`
 - `.env.example` — список поддерживаемых переменных окружения (не загружается
   автоматически)
 
@@ -45,7 +46,9 @@ MCP-клиент → этот сервер (127.0.0.1:9999, Bearer-токен)
 
 ```bash
 npm install
-npm start            # слушает http://127.0.0.1:9999 (только loopback)
+BRIDGE_EXECUTOR_MODEL=apmix/deepseek-v4.1-flash-1017 npm start
+# Пример модели: выберите доступную в вашей конфигурации OpenCode.
+# По умолчанию слушает http://127.0.0.1:9999.
 ```
 
 Остановка: `Ctrl+C` / `SIGTERM`. `npm start` = `node src/main.js`.
@@ -72,8 +75,8 @@ npm start            # слушает http://127.0.0.1:9999 (только loopba
 | `BRIDGE_TOKEN_FILE` | `<repo>/.bearer_token` | файл Bearer-токена |
 | `BRIDGE_LOG_FILE` | `<repo>/bridge.log` | лог |
 | `BRIDGE_EXECUTOR_AGENT` | `executor` | имя агента OpenCode |
-| `BRIDGE_EXECUTOR_MODEL` | `apmix/deepseek-v4.1-flash-1017` | модель `provider/model` |
-| `BRIDGE_WORKDIR` | `<repo>` | `cwd` subprocess `opencode api` |
+| `BRIDGE_EXECUTOR_MODEL` | нет, обязательна | модель `provider/model`, опционально `#variant`; без наследования модели OpenCode |
+| `BRIDGE_WORKDIR` | `<repo>` | абсолютный каталог сессии, передаваемый как `location.directory`; не `cwd` CLI |
 | `BRIDGE_OPENCODE_API_TIMEOUT_MS` | `30000` | таймаут одного вызова |
 | `BRIDGE_TASK_EXECUTION_TIMEOUT_MS` | `300000` | таймаут задачи |
 | `BRIDGE_WATCHDOG_INTERVAL_MS` | `3000` | период watchdog |
@@ -205,14 +208,27 @@ CLI `opencode`, `NODE_NO_WARNINGS`). Дополнительные перемен
 можно добавить в unit через `Environment=`/`EnvironmentFile=`; `.env` unit
 сам не читает.
 
+В шаблон добавлен обязательный `EnvironmentFile=/etc/opencode-mcp-bridge/bridge.env`.
+До старта администратор должен создать этот файл (рекомендуемые права 0600)
+с явным `BRIDGE_EXECUTOR_MODEL=apmix/deepseek-v4.1-flash-1017`, заменив пример
+на доступную модель. В systemd-файле используйте строки `NAME=value`, без
+`export`. Проверьте User, Group, WorkingDirectory и PATH под свою установку.
+Установщик пока привязан к исходной машине, останавливает процессы и включает
+nginx: не запускайте его без отдельного ревью. Этот патч его не исправляет.
+
 ## Тесты
 
 ```bash
-./run_tests.sh                                # mock + http (node --test)
-node test/smoke.js "$(cat .bearer_token)"     # вручную против запущенного сервера
+npm test                                    # только изолированные тесты
+./run_tests.sh                              # тот же список
+npm run test:smoke -- "$(cat .bearer_token)" # отдельно, против живого сервера
 ```
 
-`run_tests.sh` и `http.test.js` не вызывают реальный `opencode`. `test/smoke.js`
+`npm test` и `run_tests.sh` запускают один явный список:
+`mock.test.js`, `http.test.js`, `api-compat.test.js`,
+`executor-integration.test.js`, `hardening.test.js`. Реальный `opencode`
+не вызывается; HTTP-тесты могут открывать локальный порт. Smoke в этот список
+не входит и может создать реальную задачу и изменить файлы. `test/smoke.js`
 — ручная проверка против уже запущенного сервера на `127.0.0.1:9999`: отправляет
 задачу, опрашивает статус, проверяет результат и наличие вызовов инструментов.
 Она ожидает файл `test/e2e-fixture.txt` относительно рабочей директории
@@ -220,8 +236,8 @@ executor-сессии (в репозиторий этот fixture не вход�
 
 ## Ограничения
 
-- Рабочая директория сессии OpenCode по умолчанию — каталог запуска OpenCode
-  (глобальный корень), а не `BRIDGE_WORKDIR`: тело `POST /api/session` пустое,
-  поэтому `cwd` subprocess не задаёт директорию сессии; executor использует
-  абсолютные пути.
+- Мост запрашивает каталог сессии через `location.directory` из
+  `BRIDGE_WORKDIR`, но не проверяет фактический каталог обратным чтением.
+  CLI запускается с `cwd` процесса моста; это отдельно от каталога сессии.
+  Запускайте мост из доверенного каталога.
 - Совместимость с конкретными внешними MCP-клиентами не проверялась.
