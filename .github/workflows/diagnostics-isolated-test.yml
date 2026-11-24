@@ -1,0 +1,46 @@
+name: Isolated diagnostics tests
+on:
+  push:
+    branches: [wip/tool-error-diagnostics]
+    paths: [.github/workflows/diagnostics-isolated-test.yml]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 70a6357bd8cd314276b862de77436df6a01d1913
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify tested commit and runtime
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = 70a6357bd8cd314276b862de77436df6a01d1913
+          git rev-parse HEAD
+          node --version
+          npm --version
+      - name: Install locked dependencies
+        shell: bash
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee "$RUNNER_TEMP/npm-ci.log"
+      - name: Run full npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee "$RUNNER_TEMP/npm-test.log"
+      - name: Preserve logs even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-test-70a6357
+          path: |
+            ${{ runner.temp }}/npm-ci.log
+            ${{ runner.temp }}/npm-test.log
+          if-no-files-found: warn
+          retention-days: 7
