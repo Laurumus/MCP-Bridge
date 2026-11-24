@@ -1,101 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { TERMINAL_STATUSES } from './store.js';
 import { isAmbiguousError, parseModelRef, modelRefMatches } from './opencode-api.js';
-import { redactSecrets } from './sanitize.js';
+import { summarizeToolPart, enforceResultBudget } from './tool-diagnostics.js';
 
-const TRUNCATED_MARKER = '[TRUNCATED]';
-
-/** Max characters of a tool-error explanation kept in a toolCall entry. */
-export const TOOL_CALL_ERROR_MAX_LENGTH = 300;
-/** Max nesting depth visited when normalising an error object. */
-export const TOOL_ERROR_MAX_DEPTH = 3;
-/** Max number of entries collected (keys + array items) from an error object. */
-const TOOL_ERROR_MAX_ENTRIES = 20;
-
-/**
- * Narrow the tool part's `state.error` (string | object | null | undefined)
- * into a plain string, without ever throwing on cycles, proxies or exotic
- * values. Never calls `JSON.stringify` on the raw value, so a circular object
- * cannot break result delivery; depth and entry count are bounded.
- */
-function errorToString(value) {
-  if (value === null || value === undefined) return '';
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (typeof value !== 'object') return '';
-  // Prefer the conventional message fields.
-  const direct = errorToString(value.message) || errorToString(value.name) || errorToString(value.data);
-  if (direct) return direct;
-  const parts = ['object'];
-  const seen = new Set([value]);
-  const walk = (obj, depth) => {
-    if (depth > TOOL_ERROR_MAX_DEPTH || parts.length >= TOOL_ERROR_MAX_ENTRIES) return;
-    for (const key of Object.keys(obj)) {
-      if (parts.length >= TOOL_ERROR_MAX_ENTRIES) return;
-      let leaf;
-      try { leaf = obj[key]; } catch { continue; } // getters may throw
-      if (leaf === null || leaf === undefined) continue;
-      if (typeof leaf === 'object') {
-        if (seen.has(leaf)) { parts.push(`${key}: [circular]`); continue; }
-        seen.add(leaf);
-        walk(leaf, depth + 1);
-      } else {
-        const s = errorToString(leaf);
-        if (s) parts.push(`${key}: ${s}`);
-      }
-    }
-  };
-  walk(value, 0);
-  // 'object' alone carries no information worth sending.
-  return parts.length > 1 ? parts.join('; ') : '';
-}
-
-/**
- * Safe, bounded, redacted explanation of a failed tool call. Only the error
- * text is used: never the tool input/arguments, the full output or configs.
- */
-export function describeToolError(state) {
-  const parts = [];
-  const err = errorToString(state?.error);
-  if (err) parts.push(err);
-  const detail = errorToString(state?.detail);
-  // Some OpenCode versions put the explanation only into `detail`; skip it when
-  // it merely repeats the error.
-  if (detail && !parts[0]?.includes(detail)) parts.push(detail);
-  if (parts.length === 0) return null;
-
-  let s = redactSecrets(parts.join('; '));
-  // Strip control characters so the text is safe inside JSON log lines.
-  // eslint-disable-next-line no-control-regex
-  s = s.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
-  if (s.length > TOOL_CALL_ERROR_MAX_LENGTH) s = s.slice(0, TOOL_CALL_ERROR_MAX_LENGTH) + '…';
-  return s === '' ? null : s;
-}
-
-/** Only accept an id that is a short, non-empty string (never synthesised). */
-function safeCallId(value) {
-  if (typeof value !== 'string' || value === '' || value.length > 128) return null;
-  // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(value)) return null;
-  return value;
-}
-
-/**
- * Minimal, backward-compatible view of one OpenCode `tool` part: `name` and
- * `status` are always present (as before); `error` and `callID` are added only
- * when the part actually carries them. Failed calls add `error`/`callID`;
- * successful calls stay exactly `{ name, status }`.
- */
-export function summarizeToolPart(part) {
-  const entry = { name: part.name ?? null, status: part.state?.status ?? null };
-  if (entry.status === 'error') {
-    const error = describeToolError(part.state);
-    if (error) entry.error = error;
-    const callID = safeCallId(part.callID ?? part.toolCallID ?? part.state?.callID);
-    if (callID) entry.callID = callID;
-  }
-  return entry;
-}
+// Preserve the existing public helper exports used by regression tests.
+export {
+  TOOL_CALL_ERROR_MAX_LENGTH,
+  TOOL_ERROR_MAX_DEPTH,
+  describeToolError,
+  summarizeToolPart,
+  enforceResultBudget,
+} from './tool-diagnostics.js';
 
 export class BridgeError extends Error {
   constructor(message, code, cause) {
@@ -129,31 +44,6 @@ export function classifyResultStatus(outcome, toolCalls, truncated) {
   if (truncated) return 'partial';
   if (Array.isArray(toolCalls) && toolCalls.some((c) => c?.status === 'error')) return 'partial';
   return 'completed';
-}
-
-/**
- * Cap the combined size of a task result's text and toolCalls so the total
- * payload returned to the MCP client never exceeds `maxLen` characters.
- */
-export function enforceResultBudget(result, toolCalls, maxLen) {
-  const marker = TRUNCATED_MARKER;
-  let truncated = false;
-  let toolCallsJson = JSON.stringify(toolCalls);
-
-  // If toolCalls alone exhaust the budget, drop them entirely.
-  if (toolCallsJson.length + marker.length >= maxLen) {
-    toolCalls = [];
-    toolCallsJson = '[]';
-    truncated = true;
-  }
-
-  const budget = Math.max(0, maxLen - marker.length - toolCallsJson.length);
-  if (result.length > budget) {
-    result = result.slice(0, budget) + marker;
-    truncated = true;
-  }
-
-  return { result, toolCalls, truncated };
 }
 
 /**
