@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { TERMINAL_STATUSES } from './store.js';
-import { isAmbiguousError, parseModelRef } from './opencode-api.js';
+import { isAmbiguousError, parseModelRef, modelRefMatches } from './opencode-api.js';
 
 const TRUNCATED_MARKER = '[TRUNCATED]';
 
@@ -222,8 +222,22 @@ export class Executor {
       );
     }
 
+    // 0. Defensive configuration check BEFORE the slot is reserved: a missing,
+    // empty or malformed model must never reach readiness, the API or a
+    // session. Startup already validates this; the check also covers a
+    // config object mutated after construction. No fallback to an
+    // OpenCode-inherited model.
+    const expectedModel = parseModelRef(this.config.executorModel);
+    if (!expectedModel) {
+      throw new BridgeError(
+        'invalid executor model configuration (BRIDGE_EXECUTOR_MODEL is required)',
+        'BAD_CONFIG',
+      );
+    }
+
     // 1. Atomic slot reservation BEFORE any await. Two overlapping submitTask
-    // calls race synchronously here and exactly one wins.
+    // calls race synchronously here and exactly one wins. The configured model
+    // is checked even earlier (step 0) so a bad configuration never reserves it.
     if (this.activeTaskId) {
       throw new BridgeError('another task is already active', 'TASK_BUSY');
     }
@@ -251,7 +265,10 @@ export class Executor {
     // 3. Create the task's own session.
     let sessionId;
     try {
-      const resp = await this.api.createSession(this.config.workdir, this.config.opencodeApiTimeoutMs);
+      const resp = await this.api.createSession(
+        { directory: this.config.workdir },
+        this.config.opencodeApiTimeoutMs,
+      );
       sessionId = resp?.data?.id ?? null;
     } catch (e) {
       this._releaseSlot(taskId);
@@ -343,8 +360,11 @@ export class Executor {
       this.store.update(taskId, { status: 'error', outcome: null, error: 'invalid executor model ref' });
       return { ok: false, reason: 'invalid executor model configuration', code: 'BAD_CONFIG' };
     }
+    // modelRefMatches also compares an explicitly configured `#variant`; any
+    // mismatch (including a missing variant or a different one) refuses here,
+    // so the prompt is never sent to a session running another model/variant.
     const model = data.model ?? null;
-    if (!model || model.providerID !== expected.providerID || model.id !== expected.id) {
+    if (!modelRefMatches(expected, model)) {
       this.store.update(taskId, { status: 'error', outcome: null, error: 'session model mismatch' });
       return { ok: false, reason: 'session model mismatch', code: 'MODEL_MISMATCH' };
     }

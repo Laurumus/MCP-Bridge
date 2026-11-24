@@ -32,11 +32,17 @@ const DEFINITE_REJECTION_TAGS = new Set([
   'AgentNotFoundError', // 404
   'ModelNotFoundError', // 404
   'LocationNotFoundError', // 404
-  'SessionBusyError', // 409: the request was refused, not half-applied
+  // `SessionBusyError` (409) is deliberately NOT here: whether a 409 means the
+  // request was refused without running anything is not proven for every
+  // endpoint, so it stays ambiguous (see DEFINITE_REJECTION_STATUS).
 ]);
 
-/** HTTP status codes that are a definite rejection of the request. */
-const DEFINITE_REJECTION_STATUS = new Set([400, 401, 403, 404, 409]);
+/**
+ * HTTP status codes that are a definite rejection of the request.
+ * 409 (session busy) is deliberately excluded: it stays ambiguous until the
+ * API contract is established, so the executor keeps the task and the slot.
+ */
+const DEFINITE_REJECTION_STATUS = new Set([400, 401, 403, 404]);
 
 /**
  * Classify an error from the subprocess wrapper into an outcome the executor
@@ -45,8 +51,8 @@ const DEFINITE_REJECTION_STATUS = new Set([400, 401, 403, 404, 409]);
  * - 'ambiguous': the request may or may not have taken effect on the OpenCode
  *   side, so the executor MUST NOT retry and MUST keep the task tracked and
  *   the slot held. This is the DEFAULT for anything not clearly a rejection:
- *   `timeout`, `non-json`, `HTTP 429`, `5xx`, and any non-zero exit whose
- *   status/tag we could not read.
+ *   `timeout`, `non-json`, `HTTP 409`, `429`, `5xx`, and any non-zero exit
+ *   whose status/tag we could not read.
  * - 'definite': we know the request was rejected and nothing ran. `spawn`
  *   (CLI never started) and a small, explicit set of `4xx` rejections.
  */
@@ -87,23 +93,53 @@ export function isDefiniteRejection(e) {
  *
  * OpenCode's own `"provider/model"` form never starts with "/" and never has an
  * empty model part, so both are rejected here instead of being sent upstream.
+ *
+ * The string and object forms share one validator (fieldShapeError) so they
+ * cannot drift apart:
+ * - string: the WHOLE reference is trimmed once, then split on the first "/"
+ *   and at most one "#";
+ * - object: fields are taken verbatim (no trimming), so a field that carries
+ *   surrounding or inner whitespace is rejected rather than silently cleaned.
+ * In both forms: providerID is non-empty without whitespace, "/" or "#"; id is
+ * non-empty without whitespace or "#", but inner "/" IS allowed (namespaced
+ * model ids); variant, when present (null/undefined = absent), is a non-empty
+ * string without whitespace or "#" and is never trimmed silently.
  */
+function modelRefFieldError(providerID, id, variant) {
+  if (typeof providerID !== 'string' || providerID === '') return 'providerID';
+  if (/\s/.test(providerID) || providerID.includes('/') || providerID.includes('#')) return 'providerID';
+  if (typeof id !== 'string' || id === '') return 'id';
+  if (/\s/.test(id) || id.includes('#')) return 'id';
+  if (variant === undefined || variant === null) return null;
+  if (typeof variant !== 'string' || variant === '') return 'variant';
+  if (/\s/.test(variant) || variant.includes('#')) return 'variant';
+  return null;
+}
+
 export function parseModelRef(model) {
   if (model && typeof model === 'object') {
-    if (
-      typeof model.id === 'string' && model.id !== ''
-      && typeof model.providerID === 'string' && model.providerID !== ''
-    ) {
-      return { id: model.id, providerID: model.providerID, ...(model.variant ? { variant: model.variant } : {}) };
-    }
-    return null;
+    const { providerID, id, variant } = model;
+    if (modelRefFieldError(providerID, id, variant)) return null;
+    const ref = { id, providerID };
+    if (variant !== undefined && variant !== null) ref.variant = variant;
+    return ref;
   }
-  if (typeof model !== 'string' || model.trim() === '') return null;
-  const [head, variant] = model.split('#');
+  if (typeof model !== 'string') return null;
+  const trimmed = model.trim();
+  if (trimmed === '') return null;
+  // Implicit String#split only returns the second element: test the count
+  // explicitly so "a/b#x#y" is rejected instead of silently truncated.
+  const parts = trimmed.split('#');
+  if (parts.length > 2) return null;
+  const head = parts[0];
   const slash = head.indexOf('/');
   if (slash <= 0 || slash === head.length - 1) return null;
-  const ref = { providerID: head.slice(0, slash), id: head.slice(slash + 1) };
-  if (variant) ref.variant = variant;
+  const providerID = head.slice(0, slash);
+  const id = head.slice(slash + 1);
+  const variant = parts.length === 2 ? parts[1] : undefined;
+  if (modelRefFieldError(providerID, id, variant)) return null;
+  const ref = { providerID, id };
+  if (variant !== undefined) ref.variant = variant;
   return ref;
 }
 
@@ -213,7 +249,7 @@ export function createOpencodeApi({ spawnFn = nodeSpawn } = {}) {
           ));
           return;
         }
-        // 204 No Content (e.g. switchAgent / switchModel) yields an empty body
+        // 204 No Content (e.g. setAgent / setModel) yields an empty body
         // on a zero exit. Treat it as a successful empty response, not an error.
         if (stdout.trim() === '') {
           resolve({});
@@ -230,9 +266,10 @@ export function createOpencodeApi({ spawnFn = nodeSpawn } = {}) {
 
   return {
     /**
-     * Create a session in an explicit directory. Passing `agent` and `model`
-     * here is optional; when omitted the server applies its defaults, and the
-     * caller reads back what was actually selected.
+     * Create a session in an explicit directory. `agent` and `model` are
+     * optional here; when omitted the server applies its defaults, and the
+     * caller reads back what was actually selected. (The bridge itself always
+     * follows up with setAgent/setModel from its own required configuration.)
      */
     createSession({ directory, agent, model } = {}, timeoutMs) {
       const body = {};
@@ -242,11 +279,11 @@ export function createOpencodeApi({ spawnFn = nodeSpawn } = {}) {
       return runApi('post', '/api/session', { data: body, timeoutMs });
     },
 
-    switchAgent(sessionId, agent, timeoutMs) {
+    setAgent(sessionId, agent, timeoutMs) {
       return runApi('post', `/api/session/${sessionId}/agent`, { data: { agent }, timeoutMs });
     },
 
-    switchModel(sessionId, model, timeoutMs) {
+    setModel(sessionId, model, timeoutMs) {
       const ref = parseModelRef(model);
       if (!ref) {
         return Promise.reject(new OpenCodeError(
@@ -262,7 +299,11 @@ export function createOpencodeApi({ spawnFn = nodeSpawn } = {}) {
       return runApi('post', `/api/session/${sessionId}/prompt`, { data: { text }, timeoutMs });
     },
 
-    getSession(sessionId, timeoutMs) {
+    /**
+     * Read the live session state (agent, model, outcome) that the executor
+     * confirms before sending a prompt and polls while a task runs.
+     */
+    getStatus(sessionId, timeoutMs) {
       return runApi('get', `/api/session/${sessionId}`, { timeoutMs });
     },
 

@@ -22,7 +22,12 @@ const api = {
 function makeContext() {
   const dir = mkdtempSync(path.join(tmpdir(), 'bridge-http-'));
   const store = new Store(path.join(dir, 'tasks.db'));
-  const executor = new Executor({ api, store, config: { executorAgent: 'executor', opencodeApiTimeoutMs: 1000 } });
+  // The model is mandatory configuration even though submissions are refused.
+  const executor = new Executor({
+    api,
+    store,
+    config: { executorAgent: 'executor', executorModel: 'apmix/deepseek-v4.1-flash-1017', opencodeApiTimeoutMs: 1000 },
+  });
   const auth = new BearerAuth(TOKEN);
   return { dir, store, executor, auth };
 }

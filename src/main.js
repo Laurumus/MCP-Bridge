@@ -1,5 +1,5 @@
 import { appendFileSync } from 'node:fs';
-import { config } from './config.js';
+import { config, validateExecutorModel } from './config.js';
 import { Store } from './store.js';
 import { OpenCodeAPI } from './opencode-api.js';
 import { Executor } from './executor.js';
@@ -17,8 +17,18 @@ function log(msg) {
 }
 
 async function main() {
+  // Fail fast on a missing/empty/invalid executor model BEFORE anything is
+  // created: no log file, no token file, no database, no recovery, no API
+  // call. The model is mandatory; there is no inherited fallback.
+  const modelCheck = validateExecutorModel(config.executorModel);
+  if (!modelCheck.ok) {
+    throw new Error(`configuration error: ${modelCheck.message}`);
+  }
+  config.executorModel = modelCheck.model;
+
   const token = loadOrCreateToken(config.tokenFile); // value is never logged
   log('opencode-mcp-bridge starting');
+  log(`executor model: ${config.executorModel}`);
 
   const store = new Store(config.dbPath);
   const executor = new Executor({

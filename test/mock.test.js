@@ -58,10 +58,13 @@ class FakeApi {
     // Session state returned by getStatus (agent/model confirmation).
     this.sessionAgent = 'executor';
     this.sessionModel = { id: 'deepseek-v4.1-flash-1017', providerID: 'apmix', variant: 'default' };
+    // Arguments of the last createSession call (the executor must pass
+    // `{ directory }`; the fixture mimics the real wrapper's object signature).
+    this.lastCreateSession = null;
     this.probeEffect = 'allow';
     this.probeError = null;
   }
-  async createSession() { this.calls.createSession++; return { data: { id: 'ses_1' } }; }
+  async createSession({ directory } = {}) { this.calls.createSession++; this.lastCreateSession = { directory }; return { data: { id: 'ses_1' } }; }
   async setAgent() { this.calls.setAgent++; return {}; }
   async setModel() { this.calls.setModel++; return {}; }
   async sendPrompt() {
@@ -178,6 +181,8 @@ test('readiness: submitTask proceeds when the executor agent is available', asyn
   const res = await ex.submitTask('hello');
   assert.equal(res.status, 'submitted');
   assert.equal(api.calls.createSession, 1, 'a session is created for a ready executor');
+  assert.deepEqual(api.lastCreateSession, { directory: CONFIG.workdir },
+    'the task session must be created in the configured absolute workdir');
 
   rmSync(dir, { recursive: true, force: true });
 });
@@ -473,7 +478,7 @@ test('classification: explicit 4xx rejection statuses are definite', () => {
 });
 
 test('classification: 429, 5xx and other statuses stay ambiguous', () => {
-  for (const s of [429, 500, 502, 503, 504, 409, 405, 422]) {
+  for (const s of [429, 500, 502, 503, 504, 409, 408, 405, 422]) {
     assert.equal(
       classifyError(new OpenCodeError('x', 'exit', { httpStatus: s })),
       'ambiguous',
@@ -523,6 +528,79 @@ test('parseModelRef: converts providerID/model string to Model.Ref object', () =
   assert.equal(parseModelRef('/model'), null);
   assert.equal(parseModelRef(null), null);
   assert.equal(parseModelRef({ id: 'x' }), null);
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Mandatory executor model (no null / no OpenCode inheritance)
+// ---------------------------------------------------------------------------
+
+test('model: missing/empty/invalid executor model refuses with BAD_CONFIG before any call', async () => {
+  for (const bad of [undefined, null, '', '   ', 'no-slash', '/model', 'provider/', 'apmix/x#']) {
+    const { dir, store } = freshStore();
+    const api = new FakeApi();
+    let readyCalls = 0;
+    const ex = makeExecutor(store, api, {
+      config: { executorModel: bad },
+      readyCheck: async () => { readyCalls++; return { ok: true, reason: null, mode: 'full' }; },
+    });
+
+    await assert.rejects(
+      () => ex.submitTask('hello'),
+      (e) => e instanceof BridgeError && e.code === 'BAD_CONFIG',
+      `model ${JSON.stringify(bad)} must be refused`,
+    );
+    assert.equal(readyCalls, 0, 'readiness check must not run');
+    assert.equal(api.calls.createSession, 0);
+    assert.equal(api.calls.setAgent, 0);
+    assert.equal(api.calls.setModel, 0);
+    assert.equal(api.calls.getStatus, 0);
+    assert.equal(api.calls.sendPrompt, 0);
+    assert.equal(ex.activeTaskId, null, 'slot must never be reserved');
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('model: a valid configured model is applied and confirmed before the prompt', async () => {
+  const { dir, store } = freshStore();
+  const api = new FakeApi();
+  api.sessionModel = { id: 'deepseek-v4.1-flash-1017', providerID: 'apmix' };
+  const ex = makeExecutor(store, api, { config: { executorModel: ' apmix/deepseek-v4.1-flash-1017 ' } });
+
+  const res = await ex.submitTask('hello');
+  assert.equal(res.status, 'submitted');
+  assert.equal(api.calls.setModel, 1);
+  assert.equal(api.calls.sendPrompt, 1);
+  assert.equal(ex.activeTaskId, res.taskID);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('model: explicitly configured variant mismatch blocks the prompt', async () => {
+  const { dir, store } = freshStore();
+  const api = new FakeApi();
+  api.sessionModel = { id: 'deepseek-v4.1-flash-1017', providerID: 'apmix', variant: 'low' };
+  const ex = makeExecutor(store, api, { config: { executorModel: 'apmix/deepseek-v4.1-flash-1017#high' } });
+
+  await assert.rejects(
+    () => ex.submitTask('hello'),
+    (e) => e instanceof BridgeError && e.code === 'MODEL_MISMATCH',
+  );
+  assert.equal(api.calls.sendPrompt, 0, 'prompt must not be sent');
+  assert.equal(ex.activeTaskId, null, 'nothing ran -> slot released');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('model: a missing variant when one is configured is also a mismatch', async () => {
+  const { dir, store } = freshStore();
+  const api = new FakeApi();
+  api.sessionModel = { id: 'deepseek-v4.1-flash-1017', providerID: 'apmix' };
+  const ex = makeExecutor(store, api, { config: { executorModel: 'apmix/deepseek-v4.1-flash-1017#high' } });
+
+  await assert.rejects(
+    () => ex.submitTask('hello'),
+    (e) => e instanceof BridgeError && e.code === 'MODEL_MISMATCH',
+  );
+  assert.equal(api.calls.sendPrompt, 0);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------

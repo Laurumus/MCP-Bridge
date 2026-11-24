@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseModelRef, describeModelRef } from './opencode-api.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const BRIDGE_DIR = path.resolve(__dirname, '..');
@@ -15,16 +16,45 @@ function num(value, fallback) {
 /**
  * Normalize the executor model setting.
  *
- * - unset / empty / whitespace -> null: use the model OpenCode itself selects
- *   for the new session (its configured default). The bridge never invents a
- *   provider or model; the caller is told which model was actually chosen.
- * - otherwise: a `provider/model` reference (optional `#variant`). Whether it
- *   is valid is decided by parseModelRef() in opencode-api.js.
+ * - unset / empty / whitespace / non-string -> null, meaning "not configured".
+ *   The bridge does NOT fall back to a model chosen by OpenCode: a configured
+ *   model is mandatory, so a null result is a configuration error (reported by
+ *   validateExecutorModel() and refused by the executor).
+ * - otherwise: the trimmed `provider/model` reference (optional `#variant`).
+ *
+ * Syntax is validated separately by parseModelRef() in opencode-api.js.
  */
 export function parseExecutorModelSetting(value) {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Validate the mandatory executor model setting at startup.
+ *
+ * Returns `{ ok: true, model }` with the normalized reference, or
+ * `{ ok: false, message }` with a clear, secret-free explanation for
+ * BRIDGE_EXECUTOR_MODEL being missing, empty or malformed. There is no
+ * fallback: the bridge must not run without an explicit model.
+ *
+ * The rejected value itself is NEVER echoed into the message: a mistyped
+ * `provider/model` setting can be an accidentally pasted credential.
+ *
+ * The value is validated exactly as passed (no `process.env` default): the
+ * caller decides where it comes from, which keeps `undefined` an error.
+ */
+export function validateExecutorModel(value) {
+  const hint = 'Set BRIDGE_EXECUTOR_MODEL to a "provider/model" reference'
+    + ' (optionally "provider/model#variant"), e.g. apmix/deepseek-v4.1-flash-1017.';
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { ok: false, message: `BRIDGE_EXECUTOR_MODEL is required but ${value === undefined ? 'unset' : 'empty'}. ${hint}` };
+  }
+  const ref = parseModelRef(value);
+  if (!ref) {
+    return { ok: false, message: `BRIDGE_EXECUTOR_MODEL is not a valid model reference (value not shown). ${hint}` };
+  }
+  return { ok: true, model: describeModelRef(ref) };
 }
 
 /**
@@ -47,7 +77,9 @@ export const config = {
   logFile: process.env.BRIDGE_LOG_FILE || path.join(BRIDGE_DIR, 'bridge.log'),
 
   // The executor agent and model are set locally, never from the client.
-  // executorModel === null means "use the model OpenCode selects by default".
+  // executorModel is REQUIRED (validateExecutorModel); null means it is
+  // missing or blank, which the executor refuses as a configuration error.
+  // This module never falls back to a model inherited from OpenCode.
   executorAgent: process.env.BRIDGE_EXECUTOR_AGENT || 'executor',
   executorModel: parseExecutorModelSetting(process.env.BRIDGE_EXECUTOR_MODEL),
   // Absolute directory requested for each task's OpenCode session
