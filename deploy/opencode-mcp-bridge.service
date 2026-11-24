@@ -1,0 +1,34 @@
+[Unit]
+Description=OpenCode MCP bridge (Streamable HTTP, loopback only)
+# Depends on the OpenCode background server for `opencode api` subprocess calls.
+# Order after its service so it is invoked first at boot. This is ordering only:
+# it does NOT guarantee the API is ready to accept requests, because
+# opencode.service is a oneshot that daemonizes `opencode serve --service`. The
+# bridge already retries the agent lookup (HTTP 404) for that cold-boot race.
+After=network-online.target opencode.service
+Wants=network-online.target
+# Reasonable restart-rate limit: at most 5 restarts within 60s.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=opencode
+Group=opencode
+WorkingDirectory=/home/opencode/projects/opencode-mcp-bridge
+# systemd does not read shell profiles or nvm. Provide HOME and a PATH that
+# resolves the `opencode` CLI (/home/opencode/.opencode/bin/opencode).
+Environment=HOME=/home/opencode
+Environment=PATH=/home/opencode/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+Environment=NODE_NO_WARNINGS=1
+# Absolute path to the real Node.js; the entry script runs from the working
+# directory. Config, Bearer token, SQLite, model and executor are all read from
+# defaults inside the project (config.js + .bearer_token); the loopback bind
+# (BRIDGE_HOST defaults to 127.0.0.1) is preserved unchanged.
+ExecStart=/usr/bin/node src/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

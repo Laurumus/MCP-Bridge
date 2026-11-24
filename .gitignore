@@ -1,0 +1,55 @@
+# --- Secrets and credentials -------------------------------------------------
+# The bridge's own Bearer token (created automatically, mode 0600).
+.bearer_token
+# Any other dotfile-style token/session/secret files.
+.*token
+.*_token
+.*secret*
+.*session
+.*_session
+.secrets/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+id_ecdsa
+
+# --- Local databases and SQLite sidecars -------------------------------------
+# task database (default BRIDGE_DB_PATH) + WAL/SHM/journal sidecars
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+
+# --- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# --- Backups -----------------------------------------------------------------
+backups/
+*.bak
+
+# --- Dependencies ------------------------------------------------------------
+node_modules/
+.npm/
+npm-debug.log*
+
+# --- Local environment files --------------------------------------------------
+# Real local environment only; the documented template stays tracked.
+.env
+.env.*
+!.env.example
+
+# --- Editor / OS noise (not project data) ------------------------------------
+.DS_Store
+*.swp
+
+# --- Local agent handoff notes (not project data) ----------------------------
+.agent-handoff.md
