@@ -8,6 +8,8 @@ const tests = [
   'test/api-compat.test.js',
   'test/executor-integration.test.js',
   'test/hardening.test.js',
+  'test/tool-error-diagnostics.test.js',
+  'test/sanitize-regression.test.js',
 ];
 const child = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...tests], {
   cwd: root,
