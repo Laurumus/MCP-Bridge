@@ -10,6 +10,7 @@ const tests = [
   'test/hardening.test.js',
   'test/tool-error-diagnostics.test.js',
   'test/sanitize-regression.test.js',
+  'test/tool-diagnostics-unit.test.js',
 ];
 const child = spawnSync(process.execPath, ['--test', ...process.argv.slice(2), ...tests], {
   cwd: root,
