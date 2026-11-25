@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 
-import { parseExecutorModelSetting, validateExecutorModel, isLoopbackHost } from '../src/config.js';
+import { parseExecutorModelSetting, validateExecutorModel, isLoopbackHost, nonLoopbackHostWarning } from '../src/config.js';
 import {
   OpenCodeError,
   classifyError,
@@ -113,6 +113,30 @@ test('config: loopback detection accepts only loopback names', () => {
   for (const h of ['0.0.0.0', '10.0.0.5', 'example.com', '', null, undefined]) {
     assert.equal(isLoopbackHost(h), false, String(h));
   }
+});
+
+test('config: non-loopback host warning is null for loopback names', () => {
+  for (const h of ['127.0.0.1', '::1', 'localhost']) {
+    assert.equal(nonLoopbackHostWarning(h), null, h);
+  }
+});
+
+test('config: non-loopback host warning names a non-loopback host', () => {
+  for (const h of ['0.0.0.0', '192.168.1.10', 'example.com']) {
+    const warning = nonLoopbackHostWarning(h);
+    assert.equal(typeof warning, 'string', h);
+    assert.ok(warning.includes(h), `warning must name ${h}: ${warning}`);
+    assert.ok(!/[\n\r]/.test(warning), 'warning is a single line');
+  }
+});
+
+test('config: non-loopback host warning carries no secret value', () => {
+  // The helper takes only the host, so a token cannot be substituted into it.
+  assert.equal(nonLoopbackHostWarning.length, 1);
+  const secret = 'sk-smoke-secret-value-123';
+  const warning = nonLoopbackHostWarning('0.0.0.0', secret);
+  assert.ok(!warning.includes(secret));
+  assert.equal(warning, nonLoopbackHostWarning('0.0.0.0'));
 });
 
 // ---------------------------------------------------------------------------

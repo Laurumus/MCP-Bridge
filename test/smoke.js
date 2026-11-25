@@ -2,19 +2,23 @@
 // submit_task -> get_task_status -> get_task_result and verify the executor
 // actually used tools (non-empty toolCalls) and produced a result.
 //
-// Usage: node test/smoke.js <token>
-// The bridge server must already be running on 127.0.0.1:9999.
+// Usage: node test/smoke.js [token]
+// The token may instead come from BRIDGE_SMOKE_TOKEN (keeps it out of the
+// process list). The URL defaults to http://127.0.0.1:9999/mcp and can be
+// overridden with BRIDGE_SMOKE_URL. The bridge server must already be running.
+// The token is never printed.
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const token = process.argv[2];
+const token = process.argv[2] || process.env.BRIDGE_SMOKE_TOKEN;
 if (!token) {
-  console.error('usage: node test/smoke.js <token>');
+  console.error('usage: node test/smoke.js [token]');
+  console.error('  token also accepted via BRIDGE_SMOKE_TOKEN; URL via BRIDGE_SMOKE_URL');
   process.exit(2);
 }
 
 const TERMINAL = ['completed', 'partial', 'failed', 'cancelled', 'blocked'];
-const url = 'http://127.0.0.1:9999/mcp';
+const url = process.env.BRIDGE_SMOKE_URL || 'http://127.0.0.1:9999/mcp';
 const transport = new StreamableHTTPClientTransport(new URL(url), {
   requestInit: { headers: { Authorization: `Bearer ${token}` } },
 });

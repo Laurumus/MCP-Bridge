@@ -27,11 +27,23 @@ MCP-клиент → этот сервер (127.0.0.1:9999, Bearer-токен)
   временем
 - `src/server.js` — Streamable HTTP MCP-сервер с мультисессионным
   жизненным циклом, валидацией аргументов и безопасными кодами ошибок
+- `src/tool-diagnostics.js` — сводки вызовов инструментов (`name`, `status`,
+  опциональные `error`/`callID`) и бюджет результата
+- `src/sanitize.js` — best-effort редакция секретов в диагностическом тексте
 - `src/main.js` — точка входа
 - `test/mock.test.js` — изолированные mock-тесты (FakeApi, временная БД,
   реальный `opencode` не вызывается)
 - `test/http.test.js` — тест HTTP/MCP жизненного цикла в процессе, реальный
   `opencode` не вызывается
+- `test/api-compat.test.js` — совместимость с формами ответов `opencode api`
+- `test/executor-integration.test.js` — жизненный цикл Executor без реального
+  `opencode`
+- `test/hardening.test.js` — проверки ужесточения/безопасных отказов
+- `test/tool-error-diagnostics.test.js` — диагностика ошибок tool calls в
+  `get_task_result`
+- `test/sanitize-regression.test.js` — регрессии редакции секретов
+- `test/tool-diagnostics-unit.test.js` — unit-тесты нормализации ошибок и
+  бюджета
 - `test/smoke.js` — ручная end-to-end проверка против **запущенного** сервера
 - `executor-config.example.json` — **пример** конфигурации ограниченного
   executor-агента (не применён)
@@ -87,6 +99,12 @@ BRIDGE_EXECUTOR_MODEL=apmix/deepseek-v4.1-flash-1017 npm start
 
 Числовые значения `<= 0` или нечисловые заменяются дефолтом.
 
+Если `BRIDGE_HOST` не loopback (`127.0.0.1`, `::1`, `localhost`), при старте
+выводится предупреждение с именем хоста: мост даёт доступ к исполнению
+инструментов по Bearer-токену, поэтому трафик и токен нужно защищать (TLS,
+обратный прокси, файрвол). Запуск не блокируется; на loopback нового вывода
+нет.
+
 **Как передавать окружение.** Сервер **не загружает `.env` автоматически**
 (в проекте нет dotenv). Варианты:
 
@@ -111,8 +129,8 @@ set -a; . ./.env; set +a; node src/main.js
 | Инструмент | Вход | Возврат |
 |---|---|---|
 | `submit_task` | `{ prompt }` | `{ taskID, status }` |
-| `get_task_status` | `{ taskID }` | `{ taskID, status, outcome, cost, tokens }` |
-| `get_task_result` | `{ taskID, cursor? }` | `{ taskID, result, toolCalls, outcome, hasMore, cursor, truncated, cost, tokens }` |
+| `get_task_status` | `{ taskID }` | `{ taskID, status, outcome, error, cost, tokens }` |
+| `get_task_result` | `{ taskID, cursor? }` | `{ taskID, status, result, toolCalls, outcome, error, hasMore, cursor, truncated, cost, tokens }` |
 | `cancel_task` | `{ taskID }` | `{ taskID, cancelled, status }` |
 
 Клиент не может передавать: agent/model, sessionID, произвольный API path,
@@ -120,6 +138,49 @@ shell-команды, путь проекта, permissions. Агент, моде
 задаются локально (`BRIDGE_EXECUTOR_AGENT`, `BRIDGE_EXECUTOR_MODEL`,
 `BRIDGE_WORKDIR`). `inputSchema` описан для `tools/list`; аргументы
 валидируются явно в коде.
+
+### Диагностика вызовов инструментов (`get_task_result`)
+
+`toolCalls` — массив сводок, собранных мостом из assistant-сообщений:
+`{ name, status }` присутствуют всегда (`null`, если в исходном part поля
+нет). Только при `status: "error"` могут появиться:
+
+- `error` — строка из `state.error`/`state.detail` (с предпочтением полей
+  `message`, `name`, `data`; геттеры и `toJSON` не вызываются, циклы
+  помечаются `[circular]`). Сначала выполняется редакция секретов, затем
+  управляющие символы заменяются пробелами, текст обрезается. Итог ограничен первыми 300 символами
+  (при усечении добавляется `…`); пустой после очистки текст опускается.
+- `callID` — идентификатор вызова берётся из `part.callID`, затем
+  `part.toolCallID`, затем `state.callID`, а в реальных данных OpenCode — из
+  `id` самой части (последний запасной источник), и только если это строка из
+  `[A-Za-z0-9_.:-]` длиной 1..128. Поведение best-effort: иначе поле
+  отсутствует и не синтезируется.
+
+`input`, `output`, `args` и прочие поля tool part в ответ **не экспортируются**.
+В `result` попадает только текст assistant-сообщений; reasoning исключается.
+
+Извлечение ошибки ограничено глубиной 3 и бюджетом 20 посещаемых узлов;
+строковое значение узла длиннее 16384 символов заменяется на
+`[diagnostic omitted: oversized error]…`, а собранный текст длиннее 16384
+символов целиком заменяется на `[REDACTED] oversized diagnostic`. Редакция — best-effort по шаблонам
+(headers, `api_key`, `password`, `token`, Bearer, `sk-`, GitHub, AWS,
+Slack): она **не гарантирует** отсутствие секретов в произвольном тексте.
+
+Бюджет: `result.length + JSON.stringify(toolCalls).length` не должен
+превышать `BRIDGE_MAX_RESULT_LENGTH` (по умолчанию 50000); это не размер
+полного MCP-конверта. При превышении `truncated: true`, текст результата
+усекается и получает `[TRUNCATED]`, при отборе приоритет отдаётся вызовам
+со статусом `error` (в исходном порядке), длинные `error` могут усекаться,
+часть сводок может быть отброшена. `truncated` относится только к бюджету,
+не к пагинации `cursor`/`hasMore`. Отдельного счётчика числа ошибок нет.
+
+Статус `partial` выставляется, когда OpenCode сообщил об успехе (outcome не
+`failed`/`interrupted` и не пуст), но результат усечён по бюджету или среди
+оставленных `toolCalls` есть вызов со `status: "error"`; полным успехом
+такая задача не считается.
+Ошибочный вызов инструмента возможен и при успешном итоге задачи: например,
+если модель передала неизвестное имя аргумента, OpenCode отклоняет вызов, а
+текст ошибки может показывать пустые аргументы.
 
 ## Мультисессионный Streamable HTTP
 
@@ -221,16 +282,22 @@ nginx: не запускайте его без отдельного ревью. 
 ```bash
 npm test                                    # только изолированные тесты
 ./run_tests.sh                              # тот же список
-npm run test:smoke -- "$(cat .bearer_token)" # отдельно, против живого сервера
+BRIDGE_SMOKE_TOKEN="$(cat .bearer_token)" npm run test:smoke # отдельно, против живого сервера
 ```
 
-`npm test` и `run_tests.sh` запускают один явный список:
+`npm test` и `run_tests.sh` запускают один явный список из восьми файлов:
 `mock.test.js`, `http.test.js`, `api-compat.test.js`,
-`executor-integration.test.js`, `hardening.test.js`. Реальный `opencode`
+`executor-integration.test.js`, `hardening.test.js`,
+`tool-error-diagnostics.test.js`, `sanitize-regression.test.js`,
+`tool-diagnostics-unit.test.js`. Реальный `opencode`
 не вызывается; HTTP-тесты могут открывать локальный порт. Smoke в этот список
 не входит и может создать реальную задачу и изменить файлы. `test/smoke.js`
-— ручная проверка против уже запущенного сервера на `127.0.0.1:9999`: отправляет
-задачу, опрашивает статус, проверяет результат и наличие вызовов инструментов.
+— ручная проверка против уже запущенного сервера: URL берётся из
+`BRIDGE_SMOKE_URL` (по умолчанию `http://127.0.0.1:9999/mcp`), токен — из
+первого аргумента, а при его отсутствии из `BRIDGE_SMOKE_TOKEN` (чтобы не
+светить секрет в списке процессов). Она создаёт реальную задачу, вызывает
+модель, опрашивает статус, проверяет результат и наличие вызовов инструментов;
+токен не печатается.
 Она ожидает файл `test/e2e-fixture.txt` относительно рабочей директории
 executor-сессии (в репозиторий этот fixture не входит).
 

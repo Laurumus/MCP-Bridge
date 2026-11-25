@@ -1,5 +1,5 @@
 import { appendFileSync } from 'node:fs';
-import { config, validateExecutorModel } from './config.js';
+import { config, validateExecutorModel, nonLoopbackHostWarning } from './config.js';
 import { Store } from './store.js';
 import { OpenCodeAPI } from './opencode-api.js';
 import { Executor } from './executor.js';
@@ -29,6 +29,9 @@ async function main() {
   const token = loadOrCreateToken(config.tokenFile); // value is never logged
   log('opencode-mcp-bridge starting');
   log(`executor model: ${config.executorModel}`);
+  // Loud but non-blocking: a non-loopback BRIDGE_HOST is allowed for proxy setups.
+  const hostWarning = nonLoopbackHostWarning(config.host);
+  if (hostWarning) log(hostWarning);
 
   const store = new Store(config.dbPath);
   const executor = new Executor({

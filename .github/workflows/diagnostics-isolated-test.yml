@@ -1,8 +1,10 @@
 name: Isolated diagnostics tests
 on:
   push:
-    branches: [wip/tool-error-diagnostics]
-    paths: [.github/workflows/diagnostics-isolated-test.yml]
+    branches: [main, wip/tool-error-diagnostics]
+  pull_request:
+    branches: [main, wip/tool-error-diagnostics]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -12,18 +14,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 70a6357bd8cd314276b862de77436df6a01d1913
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Verify tested commit and runtime
+      - name: Report tested commit and runtime
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = 70a6357bd8cd314276b862de77436df6a01d1913
           git rev-parse HEAD
           node --version
           npm --version
+          node -e "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 5)) { console.error('Node >=22.5 is required'); process.exit(1); }"
       - name: Install locked dependencies
         shell: bash
         run: |
@@ -38,7 +39,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diagnostics-test-70a6357
+          name: diagnostics-test-logs
           path: |
             ${{ runner.temp }}/npm-ci.log
             ${{ runner.temp }}/npm-test.log

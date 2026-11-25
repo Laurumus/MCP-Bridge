@@ -66,7 +66,10 @@ export function summarizeToolPart(part) {
   if (entry.status !== 'error') return entry;
   const error = describeToolError(state);
   if (error) entry.error = error;
-  const id = ownValue(part, 'callID') ?? ownValue(part, 'toolCallID') ?? ownValue(state, 'callID');
+  // Explicit call-id fields win; real OpenCode tool parts expose the id only
+  // as the top-level `id`, so it is the last fallback.
+  const id = ownValue(part, 'callID') ?? ownValue(part, 'toolCallID')
+    ?? ownValue(state, 'callID') ?? ownValue(part, 'id');
   if (typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(id)) entry.callID = id;
   return entry;
 }

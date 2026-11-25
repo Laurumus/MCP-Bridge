@@ -68,6 +68,25 @@ export function isLoopbackHost(host) {
   return LOOPBACK_HOSTS.includes(String(host ?? '').toLowerCase());
 }
 
+/**
+ * Warning text for a non-loopback BRIDGE_HOST, or null for a loopback one.
+ *
+ * The bridge exposes tool execution guarded only by a Bearer token, and a
+ * non-loopback address has no TLS and no client isolation. This returns a
+ * human-readable warning naming the host; the startup path logs it without
+ * blocking. It takes only the host: the token and every other secret are
+ * deliberately out of reach, so no secret value can leak into the message.
+ */
+export function nonLoopbackHostWarning(host) {
+  if (isLoopbackHost(host)) return null;
+  const shown = String(host ?? '').trim() || '(empty)';
+  return `WARNING: BRIDGE_HOST=${shown} is not a loopback address.`
+    + ' The bridge lets anyone holding the Bearer token execute tools.'
+    + ' This address has no TLS and no client isolation, so protect both the'
+    + ' traffic and the token (TLS / reverse proxy / firewall).'
+    + ' Startup continues; this is a warning, not a fatal error.';
+}
+
 export const config = {
   host: process.env.BRIDGE_HOST || '127.0.0.1',
   port: num(process.env.BRIDGE_PORT, 9999),

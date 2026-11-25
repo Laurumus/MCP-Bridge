@@ -47,6 +47,44 @@ test('normalization: primitive and object errors, no raw input or output', () =>
   assert.deepEqual(summarizeToolPart(part), { name: 'write', status: 'error', error: 'EACCES', callID: 'call_1' });
 });
 
+test('callID: real OpenCode part shape uses the top-level id and leaks no input', () => {
+  const part = {
+    type: 'tool', id: 'prt_realistic123', name: 'read', executed: true,
+    state: {
+      status: 'error',
+      input: { file_path: '/x/y' },
+      error: { type: 'tool.execution', message: 'Invalid arguments for tool "read": - path: Missing key' },
+    },
+    time: {},
+  };
+  const entry = summarizeToolPart(part);
+  assert.equal(entry.callID, 'prt_realistic123');
+  assert.equal(entry.name, 'read');
+  assert.equal(entry.status, 'error');
+  assert.match(entry.error, /Invalid arguments for tool "read"/);
+  const serialized = JSON.stringify(entry);
+  assert.equal(serialized.includes('/x/y'), false, 'input path must not be exported');
+  assert.equal(serialized.includes('file_path'), false, 'input keys must not be exported');
+});
+
+test('callID: explicit callID wins over a top-level id', () => {
+  const part = { type: 'tool', id: 'prt_realistic123', name: 'read', callID: 'call_explicit_1',
+    state: { status: 'error', error: 'boom' } };
+  assert.equal(summarizeToolPart(part).callID, 'call_explicit_1');
+});
+
+test('callID: an id with invalid characters does not produce the field', () => {
+  const part = { type: 'tool', id: 'prt/realistic 123', name: 'read',
+    state: { status: 'error', error: 'boom' } };
+  assert.equal('callID' in summarizeToolPart(part), false);
+});
+
+test('callID: a successful part with an id gets no callID', () => {
+  const part = { type: 'tool', id: 'prt_realistic123', name: 'read',
+    state: { status: 'completed', input: { file_path: '/x/y' } } };
+  assert.deepEqual(summarizeToolPart(part), { name: 'read', status: 'completed' });
+});
+
 test('budget: preserve a failed call when a successful history is too large', () => {
   const calls = Array.from({ length: 100 }, () => ({ name: 'read', status: 'completed' }));
   calls.push({ name: 'write', status: 'error', error: 'EACCES: permission denied' });
