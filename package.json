@@ -4,6 +4,7 @@
   "description": "Local MCP bridge delegating isolated tasks to OpenCode via subprocess opencode api",
   "type": "module",
   "private": true,
+  "license": "MIT",
   "engines": {
     "node": ">=22.5"
   },
