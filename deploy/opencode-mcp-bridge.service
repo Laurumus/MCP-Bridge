@@ -1,0 +1,40 @@
+# Template: review User, WorkingDirectory, PATH and EnvironmentFile before installing.
+[Unit]
+Description=OpenCode MCP bridge (Streamable HTTP, loopback only)
+# Depends on the OpenCode background server for `opencode api` subprocess calls.
+# Order after its service so it is invoked first at boot. This is ordering only:
+# it does NOT guarantee the API is ready to accept requests, because
+# opencode.service is a oneshot that daemonizes `opencode serve --service`. The
+# bridge already retries the agent lookup (HTTP 404) for that cold-boot race.
+After=network-online.target opencode.service
+Wants=network-online.target
+# Reasonable restart-rate limit: at most 5 restarts within 60s.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+# example service user; adjust
+User=opencode
+Group=opencode
+WorkingDirectory=/opt/opencode-mcp-bridge
+# systemd does not read shell profiles or nvm. Add the directory containing the
+# `opencode` CLI (for example <home>/.opencode/bin) to PATH.
+# adjust to the service user's home
+Environment=HOME=/home/opencode
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=NODE_NO_WARNINGS=1
+# Required local configuration; create this file before starting the service.
+# Set BRIDGE_EXECUTOR_MODEL=provider/model (optionally #variant).
+EnvironmentFile=/etc/opencode-mcp-bridge/bridge.env
+# Absolute path to the real Node.js; the entry script runs from the working
+# directory. BRIDGE_* settings come from EnvironmentFile above; there is no
+# default executor model. Other defaults are defined in config.js.
+# BRIDGE_HOST defaults to 127.0.0.1; do not expose it unintentionally.
+ExecStart=/usr/bin/node src/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
