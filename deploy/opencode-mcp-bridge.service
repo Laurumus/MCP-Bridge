@@ -1,3 +1,4 @@
+# Template: review User, WorkingDirectory, PATH and EnvironmentFile before installing.
 [Unit]
 Description=OpenCode MCP bridge (Streamable HTTP, loopback only)
 # Depends on the OpenCode background server for `opencode api` subprocess calls.
@@ -13,13 +14,15 @@ StartLimitBurst=5
 
 [Service]
 Type=exec
+# example service user; adjust
 User=opencode
 Group=opencode
-WorkingDirectory=/home/opencode/projects/opencode-mcp-bridge
-# systemd does not read shell profiles or nvm. Provide HOME and a PATH that
-# resolves the `opencode` CLI (/home/opencode/.opencode/bin/opencode).
+WorkingDirectory=/opt/opencode-mcp-bridge
+# systemd does not read shell profiles or nvm. Add the directory containing the
+# `opencode` CLI (for example <home>/.opencode/bin) to PATH.
+# adjust to the service user's home
 Environment=HOME=/home/opencode
-Environment=PATH=/home/opencode/.opencode/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=NODE_NO_WARNINGS=1
 # Required local configuration; create this file before starting the service.
 # Set BRIDGE_EXECUTOR_MODEL=provider/model (optionally #variant).

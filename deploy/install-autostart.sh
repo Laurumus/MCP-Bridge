@@ -2,13 +2,17 @@
 # Install and enable the OpenCode MCP bridge as a systemd service, and switch
 # the manually-started bridge over to it. Must be run as root (via sudo).
 # Fails fast on any error; never prints secrets; does not touch the SSH shell.
+#
+# Note: the unit is copied as-is. Edit its User, WorkingDirectory and PATH for
+# this machine BEFORE running this script.
 set -euo pipefail
 
-UNIT_SRC="/home/opencode/projects/opencode-mcp-bridge/deploy/opencode-mcp-bridge.service"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BRIDGE_DIR="$(dirname "$SCRIPT_DIR")"
+UNIT_SRC="$SCRIPT_DIR/opencode-mcp-bridge.service"
 UNIT_DST="/etc/systemd/system/opencode-mcp-bridge.service"
 SERVICE="opencode-mcp-bridge.service"
-BRIDGE_DIR="/home/opencode/projects/opencode-mcp-bridge"
-PORT="9999"
+PORT="${BRIDGE_PORT:-9999}"
 
 log() { printf '%s\n' "$*"; }
 
@@ -33,8 +37,8 @@ systemd-analyze verify "$SERVICE"
 
 # --- 3. stop the manual bridge (strict match only) ---------------------------
 # Discover a process whose command is exactly `node src/main.js`, owned by
-# opencode, with cwd = the project dir. This avoids broad pkill and matches only
-# the manual bridge, not the other node processes (proxmox, uptime-kuma, ...).
+# opencode, with cwd = the bridge directory. This avoids broad pkill and matches
+# only the manual bridge, not other node processes.
 find_manual_bridge() {
   local pid cmd owner cwd
   for pid in $(pgrep -x node 2>/dev/null || true); do
@@ -83,17 +87,9 @@ systemctl enable "$SERVICE"
 systemctl start "$SERVICE"
 log "enabled and started $SERVICE"
 
-# --- 6. ensure nginx autostart (already enabled; idempotent, no restart) -----
-if systemctl is-enabled nginx >/dev/null 2>&1; then
-  log "nginx already enabled"
-else
-  systemctl enable nginx
-  log "nginx enabled"
-fi
-
-# --- 7. summary --------------------------------------------------------------
+# --- 6. summary --------------------------------------------------------------
 log ""
 log "=== status ==="
-systemctl is-enabled "$SERVICE" nginx
-systemctl is-active  "$SERVICE" nginx
+systemctl is-enabled "$SERVICE"
+systemctl is-active "$SERVICE"
 systemctl status "$SERVICE" --no-pager -l -n 12 || true
